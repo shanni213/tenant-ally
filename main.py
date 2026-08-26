@@ -1,6 +1,16 @@
 import os
+import sys
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from config import GEMINI_API_KEY, SYSTEM_PROMPT
+from tools import GEMINI_TOOLS_DECLARATION, TOOLS_MAP
+
+# Initialize the official SDK client
+client = genai.Client(api_key=GEMINI_API_KEY)
+
 
 def safe_prepare_pdf_contract(file_path: str):
     """
@@ -9,111 +19,194 @@ def safe_prepare_pdf_contract(file_path: str):
     אם יש בעיה: מחזירה (None, הודעת שגיאה מפורטת למשתמש).
     """
     MAX_SIZE = 10 * 1024 * 1024  # מגבלה של 10MB לחוזה
-    
+
     if not os.path.exists(file_path):
         return None, "טעות בנתיב: קובץ חוזה השכירות לא נמצא במערכת."
-        
+
     if os.path.getsize(file_path) > MAX_SIZE:
         return None, "הקובץ כבד מדי. אנא העלה חוזה שכירות שקטן מ-10MB."
-        
+
     _, ext = os.path.splitext(file_path.lower())
-    if ext != '.pdf':
+    if ext != ".pdf":
         return None, "סוג קובץ לא נתמך. המערכת מקבלת חוזי שכירות בפורמט PDF בלבד."
-        
+
     try:
         with open(file_path, "rb") as f:
             file_bytes = f.read()
-        pdf_part = types.Part.from_bytes(data=file_bytes, mime_type='application/pdf')
+        pdf_part = types.Part.from_bytes(
+            data=file_bytes, mime_type="application/pdf"
+        )
         return pdf_part, None
     except Exception:
         return None, "חלה שגיאה פנימית בקריאת קובץ ה-PDF במחשב."
 
-# הנחיה קבועה מראש לאייגנט - נשארת קבועה בתוך ה-config
-SYSTEM_INSTRUCTION = (
-    "אתה אייגנט מומחה לניתוח חוזי שכירות בישראל. "
-    "עליך לקרוא את חוזה השכירות המצורף ב-PDF, לבצע לו סיכום ברור של התנאים המרכזיים "
-    "(כמו דמי שכירות, תקופה, ערבויות), להשתמש בכלים שברשותך כדי לבדוק אם הוא כתוב נכון, "
-    "ולאתר 'נורות אדומות', ליקויים או סעיפים שיש בהם ניצול לרעה מול החוק והאתרים הרשמיים."
+
+# Handle rate limits with retry and exponential backoff as required
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    reraise=True,
 )
-
-def run_rental_contract_agent(pdf_path: str, max_steps: int = 5):
-    # 1. אתחול הלקוח של גוגל
-    client = genai.Client()
-    
-    # 2. הכנת קובץ ה-PDF בצורה בטוחה
-    pdf_part, error_message = safe_prepare_pdf_contract(pdf_path)
-    if error_message:
-        return error_message
-
-    # 3. הגדרת הקונפיגורציה הקבועה (הנחיות מערכת וכלים) - לא משתנה במהלך הלולאה
-    agent_config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
-        tools=gemini_tools
+def call_gemini_api(messages, tools):
+    """Executes a single API call to Gemini 3.7 Flash with rate-limit retries."""
+    return client.models.generate_content(
+        model="gemini-3.7-flash",
+        contents=messages,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT, tools=tools, temperature=0.1
+        ),
     )
 
-    # 4. יצירת מערך ההיסטוריה הידני (ההודעה הראשונה של המשתמש + קובץ ה-PDF)
-    user_instruction = "אנא נתח את חוזה השכירות המצורף, סכם אותו, והצבע על נורות אדומות וליקויים."
-    
-    messages = [
-        types.Content(
-            role="user", 
-            parts=[types.Part.from_text(text=user_instruction), pdf_part]
-        )
-    ]
 
-    # 5. לולאת האג'נט (ReAct)
-    for _ in range(max_steps):
+def run_agent_loop(
+    user_input: str, pdf_path: str = None, max_steps: int = 5
+) -> str:
+    """
+    Main deterministic loop executing the AI Agent task.
+    Manages the full tool lifecycle, logs steps, tracks tokens, and applies a safety brake.
+    Supports optional PDF file input.
+    """
+    print(
+        f"\n🚀 [AGENT START] Processing request: '{user_input[:50]}...'"
+    )
+
+    # Prepare input parts
+    input_parts = [types.Part.from_text(text=user_input)]
+
+    # If a PDF path is provided, validate and process it
+    if pdf_path:
+        print(f"📄 [FILE PROCESS] Loading and validating PDF: {pdf_path}")
+        pdf_part, error_message = safe_prepare_pdf_contract(pdf_path)
+        if error_message:
+            print(f"❌ [VALIDATION ERROR] {error_message}")
+            return error_message
+        input_parts.append(pdf_part)
+
+    # Initialize messages list manually (managing state)
+    messages = [types.Content(role="user", parts=input_parts)]
+
+    step = 0
+    total_input_tokens = 0
+    total_output_tokens = 0
+
+    while step < max_steps:
+        step += 1
+        print(f"\n🔄 [STEP {step}/{max_steps}] Calling Gemini 3.7 Flash...")
+
         try:
-            # שולחים את ההיסטוריה הנוכחית (messages) יחד עם הקונפיגורציה הקבועה
-            response = client.models.generate_content(
-                model='gemini-3.7-flash', # עודכן לגרסה העדכנית ביותר
-                contents=messages,
-                config=agent_config
-            )
-        except Exception as e:
-            return f"מצטער, חלה שגיאה זמנית בתקשורת עם שרת הבינה המלאכותית: {e}"
+            # Call the model
+            response = call_gemini_api(messages, GEMINI_TOOLS_DECLARATION)
 
-        # הוספת התשובה של המודל (או בקשת הכלי שלו) להיסטוריה הידנית
-        # response.candidates[0].content מכיל את המבנה המדויק של תשובת המודל
-        messages.append(response.candidates[0].content)
+            # Count tokens consumed in this call if returned by API metadata
+            if response.usage_metadata:
+                total_input_tokens += (
+                    response.usage_metadata.prompt_token_count
+                )
+                total_output_tokens += (
+                    response.usage_metadata.candidates_token_count
+                )
 
-        # בדיקה האם המודל ביקש להפעיל כלי (פונקציה)
-        if response.function_calls:
-            # מערך זמני שיכיל את כל התשובות של הכלים בסיבוב הנוכחי
-            tool_parts = []
-            
-            for call in response.function_calls:
-                if call.name not in available_tools:
-                    continue
+            # Extract candidates and messages
+            candidate = response.candidates[0] if response.candidates else None
+            if not candidate or not candidate.content:
+                print("⚠️ [WARN] Empty model response received.")
+                break
 
-                try:
-                    fn = available_tools[call.name]
-                    tool_result = fn(**call.args)
-                except Exception as e:
-                    tool_result = f"הכלי נכשל בהרצה: {e}"
+            model_content = candidate.content
+            # Append model's response to maintain chat context
+            messages.append(model_content)
 
-                # יצירת חלק התשובה עבור הכלי הספציפי
-                tool_parts.append(
-                    types.Part.from_function_response(
-                        name=call.name, 
-                        response={"result": tool_result}
+            # Check if the model wants to call a tool (Function Calling)
+            tool_calls = [
+                part.function_call
+                for part in model_content.parts
+                if part.function_call
+            ]
+
+            if not tool_calls:
+                print(
+                    "🏁 [AGENT CONCLUSION] No more tool calls requested. Returning final answer."
+                )
+                print(
+                    f"📊 [METRICS] Step Steps taken: {step} | Total Input Tokens: {total_input_tokens} | Total Output Tokens: {total_output_tokens}"
+                )
+                return response.text
+
+            # Execute requested tools (Full cycle)
+            tool_response_parts = []
+            for call in tool_calls:
+                tool_name = call.name
+                tool_args = call.args
+                print(
+                    f"🛠️ [TOOL CALL] Model requested tool '{tool_name}' with parameters: {tool_args}"
+                )
+
+                if tool_name in TOOLS_MAP:
+                    # Execute tool safely
+                    tool_function = TOOLS_MAP[tool_name]
+                    # Unpack keyword arguments dynamically
+                    result_string = tool_function(**tool_args)
+                    print(
+                        f"📥 [TOOL RESULT] Tool '{tool_name}' returned: {result_string}"
                     )
-                )
-            
-            # הוספת כל תשובות הכלים כהודעה אחת מסוג "tool" למערך ההיסטוריה הידני
-            messages.append(
-                types.Content(
-                    role="tool",
-                    parts=tool_parts
-                )
-            )
-            continue # ממשיך לצעד הבא בלולאה כדי לקבל את תגובת המודל לתשובות הכלים
-            
-        # אם אין דרישה לכלי - המודל החזיר תשובה טקסטואלית סופית
-        return response.text
 
-    return "האייגנט לא הצליח לסיים את הניתוח במסגרת מספר הצעדים המותר."
+                    # Create a specific Tool Response part to feed back to the model
+                    tool_response_parts.append(
+                        types.Part.from_function_response(
+                            name=tool_name, response={"result": result_string}
+                        )
+                    )
+                else:
+                    print(
+                        f"❌ [ERROR] Model requested an unknown tool: '{tool_name}'"
+                    )
+                    tool_response_parts.append(
+                        types.Part.from_function_response(
+                            name=tool_name,
+                            response={"result": "Error: Tool not found."},
+                        )
+                    )
+
+            # Append the execution outputs back into the conversation history as a 'tool' role
+            messages.append(
+                types.Content(role="tool", parts=tool_response_parts)
+            )
+
+        except APIError as api_err:
+            print(
+                f"❌ [CRITICAL API ERROR] Gemini API call failed: {str(api_err)}"
+            )
+            return "מצטער, חלה שגיאת תקשורת עם שרת ה-AI במהלך ניתוח המסמך."
+        except Exception as e:
+            print(f"❌ [CRITICAL SYSTEM ERROR] Internal loop crash: {str(e)}")
+            return "חלה שגיאה פנימית במערכת הניתוח."
+
+    # If the code reaches here, the safety brake was pulled
+    print(
+        f"\n🛑 [SAFETY BRAKE] Agent reached maximum allowed steps ({max_steps}) without finishing."
+    )
+    return "האייגנט הגיע למגבלת הצעדים המקסימלית מבלי להשלים את המשימה."
 
 
 if __name__ == "__main__":
-    
+    # דוגמה ראשונה: הרצה עם טקסט בלבד (כמו בקוד 1 המקורי)
+    sample_lease_problem = """
+    שכר הדירה שלי הוא 5,000 ש"ח לחודש. בעל הדירה רשם בחוזה שעלי להפקיד ערבות בנקאית של 22,000 ש"ח.
+    בנוסף, הוא הכניס סעיף שאומר 'השוכר מתחייב לתקן על חשבונו כל תקלה במזגן או באינסטלציה של הדירה'. 
+    האם החוזה תקין וחוקי?
+    """
+    print("=== הרצה 1: טקסט בלבד ===")
+    final_output_text = run_agent_loop(sample_lease_problem)
+    print("\n================ FINAL USER OUTPUT (TEXT) ================")
+    print(final_output_text)
+
+    # דוגמה שנייה: הרצה עם קובץ PDF (התוספת החדשה)
+    print("\n=== הרצה 2: שילוב קובץ PDF ===")
+    sample_pdf_path = "contract.pdf"  # שנה לנתיב של קובץ אמיתי אצלך במחשב כדי לבדוק
+    user_instruction = "אנא נתח את חוזה השכירות המצורף, סכם אותו, והצבע על נורות אדומות וליקויים."
+
+    final_output_pdf = run_agent_loop(
+        user_input=user_instruction, pdf_path=sample_pdf_path
+    )
+    print("\n================ FINAL USER OUTPUT (PDF) ================")
+    print(final_output_pdf)
