@@ -136,7 +136,7 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
                     )
 
             messages.append(
-                types.Content(role="tool", parts=tool_response_parts)
+                types.Content(role="user", parts=tool_response_parts)
             )
 
         except APIError as api_err:
