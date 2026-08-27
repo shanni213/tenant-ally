@@ -113,11 +113,6 @@ This project strictly utilizes **uv** for Python environment and dependency mana
 uv run streamlit run app.py
 ```
 
-### Run Local CLI Testing/Mock Sandbox
-To execute the baseline text loop script embedded inside `main.py`:
-```bash
-uv run main.py
-```
 
 ### Run Evaluation Suite
 To execute compliance automation checks and generate runtime audit logs:
