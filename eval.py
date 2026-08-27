@@ -62,7 +62,7 @@ def run_evaluation():
             else:
                 output_lines.append(f"Test {test['id']} FAILED (Output was: {output[:100]}...)")
                 
-        except BaseException as e:
+        except Exception as e:
             output_lines.append(f"Test {test['id']} FAILED with exception: {str(e)}")
         time.sleep(3)
             
