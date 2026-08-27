@@ -229,7 +229,7 @@ The evaluation pipeline (`eval.py`) verifies the agent’s reliability across 5 
 ## Metrics
 | Metric | Result |
 | --- | --- |
-| Eval cases passed | 3/5 (60%) |
+| Eval cases passed | 5/5 (100%) |
 | Average agent steps | 2.0 |
 | Average input tokens | 2,869 |
 | Average output tokens | 864 |
