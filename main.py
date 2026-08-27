@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import json
 
 from google import genai
 from google.genai import types
@@ -9,6 +10,7 @@ from google.genai.errors import APIError
 from config import GEMINI_API_KEY, SYSTEM_PROMPT
 from tools import GEMINI_TOOLS_DECLARATION, TOOLS_MAP, validate_tool_arguments
 
+# Configure system logging environment
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -45,7 +47,7 @@ def safe_prepare_pdf_contract(file_path: str):
         return None, "חלה שגיאה פנימית בקריאת קובץ ה-PDF במחשב."
     
 def call_gemini_api_with_retry(messages, tools):
-    sleep_times = [20 ,30 ,50 ,60]
+    sleep_times = [20, 30, 50, 60]
     
     for attempt in range(len(sleep_times) + 1):
         try:
@@ -143,9 +145,15 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
                             )
                         )
                         continue
+                    
+                    # Safe invocation of the targeted tool with isolated exception handling
                     tool_function = TOOLS_MAP[tool_name]
-                    result_string = tool_function(**tool_args)
-                    log.info(f"[TOOL RESULT] Tool '{tool_name}' returned: {str(result_string)[:100]}...")
+                    try:
+                        result_string = tool_function(**tool_args)
+                        log.info(f"[TOOL RESULT] Tool '{tool_name}' returned: {str(result_string)[:100]}...")
+                    except Exception as tool_error:
+                        log.exception(f"[TOOL ERROR] Tool '{tool_name}' execution failed: {tool_error}")
+                        result_string = json.dumps({"status": "ERROR", "error": "Tool execution failed."})
 
                     tool_response_parts.append(
                         types.Part.from_function_response(
