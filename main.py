@@ -1,13 +1,13 @@
-import os
-import sys
 import logging
+import os
+import time
+
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config import GEMINI_API_KEY, SYSTEM_PROMPT
-from tools import GEMINI_TOOLS_DECLARATION, TOOLS_MAP
+from tools import GEMINI_TOOLS_DECLARATION, TOOLS_MAP, validate_tool_arguments
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,20 +43,33 @@ def safe_prepare_pdf_contract(file_path: str):
         return pdf_part, None
     except Exception:
         return None, "חלה שגיאה פנימית בקריאת קובץ ה-PDF במחשב."
+    
+def call_gemini_api_with_retry(messages, tools):
+    sleep_times = [20 ,30 ,50 ,60]
+    
+    for attempt in range(len(sleep_times) + 1):
+        try:
+            return client.models.generate_content(
+                model="gemini-3.7-flash",
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT, tools=tools, temperature=0.1
+                ),
+            )
+        except (APIError, Exception) as e:
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=2, max=10),
-    reraise=True,
-)
-def call_gemini_api(messages, tools):
-    return client.models.generate_content(
-        model="gemini-3.7-flash",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT, tools=tools, temperature=0.1
-        ),
-    )
+            # Stop immediately if quota is reached (error 429 or quota message)
+            if "quota" in str(e).lower() or "exhausted" in str(e).lower():
+                log.error("Execution stopped: Google API quota exhausted.")
+                raise SystemExit("Stopped: Quota exhausted.")
+
+            if attempt == len(sleep_times):
+                log.error(f"Critical API failure after maximum retry attempts: {e}")
+                raise
+            
+            wait_time = sleep_times[attempt]
+            log.info(f"Sleeping for {wait_time} seconds before next retry...")
+            time.sleep(wait_time)
 
 def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) -> str:
     log.info(f"[AGENT START] Processing request: '{user_input[:50]}...'")
@@ -82,8 +95,9 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
         log.info(f"[STEP {step}/{max_steps}] Calling Gemini 3.7 Flash...")
 
         try:
-            response = call_gemini_api(messages, GEMINI_TOOLS_DECLARATION)
-
+            
+            response = call_gemini_api_with_retry(messages, GEMINI_TOOLS_DECLARATION)
+            
             if response.usage_metadata:
                 step_input = response.usage_metadata.prompt_token_count
                 step_output = response.usage_metadata.candidates_token_count
@@ -108,6 +122,7 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
             if not tool_calls:
                 log.info("[AGENT CONCLUSION] No more tool calls requested. Returning final answer.")
                 log.info(f"[METRICS] Total Steps: {step} | Total Input Tokens: {total_input_tokens} | Total Output Tokens: {total_output_tokens}")
+                log.info(f"[AGENT FINAL OUTPUT] {response.text}")
                 return response.text
 
             tool_response_parts = []
@@ -117,6 +132,17 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
                 log.info(f"[TOOL CALL] Model requested tool '{tool_name}' with parameters: {tool_args}")
 
                 if tool_name in TOOLS_MAP:
+                    is_valid, validation_msg = validate_tool_arguments(tool_name, tool_args)
+                    
+                    if not is_valid:
+                        log.warning(f"[GUARDRAIL BLOCKED] Tool '{tool_name}' blocked due to: {validation_msg}")
+                        tool_response_parts.append(
+                            types.Part.from_function_response(
+                                name=tool_name,
+                                response={"result": f"Error: Action blocked by security guardrails. {validation_msg}"},
+                            )
+                        )
+                        continue
                     tool_function = TOOLS_MAP[tool_name]
                     result_string = tool_function(**tool_args)
                     log.info(f"[TOOL RESULT] Tool '{tool_name}' returned: {str(result_string)[:100]}...")
@@ -141,7 +167,7 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
 
         except APIError as api_err:
             log.error(f"[CRITICAL API ERROR] Gemini API call failed: {str(api_err)}")
-            return "מצטער, חלה שגיאת תקשורת עם שרת ה-AI במהלך ניתוח המסמך."
+            return "מצטערים, חלה שגיאת תקשורת עם שרת ה-AI. אנא נסה שוב מאוחר יותר."
         except Exception as e:
             log.error(f"[CRITICAL SYSTEM ERROR] Internal loop crash: {str(e)}")
             return "חלה שגיאה פנימית במערכת הניתוח."
@@ -155,7 +181,7 @@ if __name__ == "__main__":
     בנוסף, הוא הכניס סעיף שאומר 'השוכר מתחייב לתקן על חשבונו כל תקלה במזגן או באינסטלציה של הדירה'. 
     האם החוזה תקין וחוקי?
     """
-    log.info("=== הרצה 1: טקסט בלבד ===")
+    log.info("=== הרצה: טקסט בלבד ===")
     final_output_text = run_agent_loop(sample_lease_problem)
     print("\n================ FINAL USER OUTPUT (TEXT) ================")
     print(final_output_text)
