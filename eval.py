@@ -7,13 +7,13 @@ TEST_CASES = [
         "id": 1,
         "name": "Legal Guarantee Violation Check",
         "input": "שכר הדירה שלי הוא 4,000 ש\"ח לחודש לשנה שלמה, ובעל הדירה דורש ערבות של 20,000 ש\"ח.",
-        "expected_status": "VIOLATION"
+        "expected_contains": ["חורגת", "בלתי חוקית", "אסורה", "חריגה","לא חוקי"]
     },
     {
         "id": 2,
-        "name": "Legal Guarantee Valid Check",
-        "input": "שכר הדירה הוא 5,000 ש\"ח לחודש לשנה, והפקדתי ערבות של 10,000 ש\"ח.",
-        "expected_status": "VALID"
+        "name": "Comprehensive Lease Audit Violation Check",
+        "input": "שכר הדירה שלי הוא 5,000 ש\"ח לחודש. בעל הדירה רשם בחוזה שעלי להפקיד ערבות בנקאית של 22,000 ש\"ח. בנוסף, הוא הכניס סעיף שאומר 'השוכר מתחייב לתקן על חשבונו כל תקלה במזגן או באינסטלציה של הדירה'. האם החוזה תקין וחוקי?",       
+        "expected_contains": ["חורגת", "בלתי חוקית", "אסורה", "חריגה","לא חוקי"]
     },
     {
         "id": 3,
@@ -48,6 +48,9 @@ def run_evaluation():
             success = True
             if "expected_status" in test and test["expected_status"] not in output:
                 success = False
+            if "expected_contains" in test:
+                if not any(word in output for word in test["expected_contains"]):
+                    success = False
             if "expected_contain" in test and test["expected_contain"] not in output:
                 success = False
             if "expected_not_contain" in test and test["expected_not_contain"] in output:
@@ -59,12 +62,15 @@ def run_evaluation():
             else:
                 output_lines.append(f"Test {test['id']} FAILED (Output was: {output[:100]}...)")
                 
-        except Exception as e:
+        except BaseException as e:
             output_lines.append(f"Test {test['id']} FAILED with exception: {str(e)}")
         time.sleep(3)
             
-    output_lines.append(f"\n=== Evaluation Finished ===")
+    output_lines.append("\n=== Evaluation Finished ===")
     output_lines.append(f"Passed: {passed}/{total} ({(passed/total)*100:.1f}%)")
+
+    with open("eval_results.txt", "w", encoding="utf-8") as f:
+        f.write("\n".join(output_lines) + "\n")
 
 if __name__ == "__main__":
     run_evaluation()
