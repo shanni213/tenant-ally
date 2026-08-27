@@ -81,7 +81,7 @@ This project strictly utilizes **uv** for Python environment and dependency mana
 1. **Clone the Repository:**
    ```bash
    git clone https://github.com/shanni213/tenant-ally
-   cd YOUR_REPO_NAME
+   cd tenant-ally
    ```
 
 2. **Initialize the Virtual Environment:**
@@ -89,17 +89,21 @@ This project strictly utilizes **uv** for Python environment and dependency mana
    uv venv
    ```
 
-3. **Install Dependencies:**
+3. **Install and Sync Project Dependencies:**
+   Reconstruct the exact tested development environment using the lockfile:
    ```bash
-   uv add streamlit google-genai python-dotenv duckduckgo_search
+   uv sync
    ```
 
 4. **Configure Environment Variables:**
-   Create a `.env` file in the root directory and add your secret token:
+   Create your local environment file from the existing template:
+   ```bash
+   cp .env.example .env
+   ```
+   Open the newly created `.env` file and set your secret API key:
    ```env
    GEMINI_API_KEY=your_gemini_api_key_here
    ```
-
 ---
 
 ## 🏃‍♂️ Execution
