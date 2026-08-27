@@ -5,6 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "certifi>=2026.7.22",
+    "ddgs>=9.15.0",
     "google-genai>=2.19.0",
+    "pip-system-certs>=5.3",
     "python-dotenv>=1.2.3",
+    "streamlit>=1.62.0",
 ]
