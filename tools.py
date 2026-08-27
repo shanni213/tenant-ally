@@ -1,6 +1,42 @@
 import json
 from datetime import datetime
-from duckduckgo_search import DDGS
+from ddgs import DDGS
+
+def validate_tool_arguments(tool_name: str, args: dict) -> tuple[bool, str]:
+    """
+    Guardrail validation: Checks that model-provided arguments are safe and logical 
+    before executing the actual tool function.
+    """
+    try:
+        if tool_name == "calculate_legal_guarantee":
+            rent = float(args.get("monthly_rent", 0))
+            duration = float(args.get("lease_duration_months", 0))
+            guarantee = float(args.get("requested_guarantee", 0))
+            
+            if rent <= 0 or duration <= 0 or guarantee < 0:
+                return False, "שגיאת אבטחה/אימות: ערכים מספריים חייבים להיות חיוביים."
+            if rent > 500000 or guarantee > 5000000:
+                return False, "שגיאת אבטחה/אימות: ערכים חריגים או מוגזמים חסומים."
+                
+        elif tool_name == "search_israeli_housing_laws":
+            query = str(args.get("query", ""))
+            if len(query) > 200:
+                return False, "שגיאת אבטחה/אימות: שאילתת חיפוש ארוכה מדי."
+            
+            forbidden_keywords = ["ignore previous", "system prompt", "drop table", "<script>"]
+            if any(kw in query.lower() for kw in forbidden_keywords):
+                return False, "שגיאת אבטחה/אימות: נמצאו תוכן או הוראות אסורות בשאילתה."
+                
+        elif tool_name == "calculate_days_between_dates":
+            start = str(args.get("start_date_str", ""))
+            end = str(args.get("end_date_str", ""))
+            
+            if len(start) != 10 or len(end) != 10:
+                return False, "שגיאת אבטחה/אימות: פורמט תאריך שגוי."
+                
+        return True, "OK"
+    except Exception as e:
+        return False, f"שגיאת אימות פנימית: {str(e)}"
 
 # Tool 1: Mathematical Calculation Tool
 def calculate_legal_guarantee(monthly_rent: float, lease_duration_months: float, requested_guarantee: float) -> str:
