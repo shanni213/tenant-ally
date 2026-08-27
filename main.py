@@ -62,8 +62,9 @@ def call_gemini_api_with_retry(messages, tools):
 
             # Stop immediately if quota is reached (error 429 or quota message)
             if "quota" in str(e).lower() or "exhausted" in str(e).lower():
-                log.error("Execution stopped: Google API quota exhausted.")
-                raise SystemExit("Stopped: Quota exhausted.")
+                log.error("Google API quota exhausted after retry attempts.")
+                raise RuntimeError("Gemini API quota exhausted. Please try again later.")
+            
 
             if attempt == len(sleep_times):
                 log.error(f"Critical API failure after maximum retry attempts: {e}")
@@ -176,20 +177,10 @@ def run_agent_loop(user_input: str, pdf_path: str = None, max_steps: int = 5) ->
         except APIError as api_err:
             log.error(f"[CRITICAL API ERROR] Gemini API call failed: {str(api_err)}")
             return "מצטערים, חלה שגיאת תקשורת עם שרת ה-AI. אנא נסה שוב מאוחר יותר."
+
         except Exception as e:
             log.error(f"[CRITICAL SYSTEM ERROR] Internal loop crash: {str(e)}")
             return "חלה שגיאה פנימית במערכת הניתוח."
 
     log.warning(f"[SAFETY BRAKE] Agent reached maximum allowed steps ({max_steps}) without finishing.")
     return "האייגנט הגיע למגבלת הצעדים המקסימלית מבלי להשלים את המשימה."
-
-if __name__ == "__main__":
-    sample_lease_problem = """
-    שכר הדירה שלי הוא 5,000 ש"ח לחודש. בעל הדירה רשם בחוזה שעלי להפקיד ערבות בנקאית של 22,000 ש"ח.
-    בנוסף, הוא הכניס סעיף שאומר 'השוכר מתחייב לתקן על חשבונו כל תקלה במזגן או באינסטלציה של הדירה'. 
-    האם החוזה תקין וחוקי?
-    """
-    log.info("=== הרצה: טקסט בלבד ===")
-    final_output_text = run_agent_loop(sample_lease_problem)
-    print("\n================ FINAL USER OUTPUT (TEXT) ================")
-    print(final_output_text)
