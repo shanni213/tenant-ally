@@ -1,27 +1,30 @@
-#pip install streamlit
-#streamlit run app.py
 import os
+import tempfile
+
 import streamlit as st
+
 from main import run_agent_loop
 
 # Configure the browser tab title, icon, and alignment setup
 st.set_page_config(
     page_title="Tenant Ally - Lease Auditor", page_icon="⚖️", layout="centered"
 )
+
+# Apply right-to-left alignment for the Hebrew user interface elements
 st.markdown(
     """
     <style>
-        /* יישור כל עמודת התצוגה והווידג'טים מימין לשמאל */
+        /* Align the entire application content column from right to left */
         .stApp {
             direction: rtl;
         }
-        /* יישור תוויות מעל שדות קלט (כמו text_area ו-file_uploader) */
+        /* Align input widget labels properly above text areas and uploaders */
         label, .stTextArea label, .stFileUploader label {
             text-align: right !important;
             direction: rtl !important;
             display: block;
         }
-        /* כיווניות טקסט בתוך תיבות הקלט עצמן */
+        /* Set input text fields to right-to-left typing direction */
         textarea, input {
             direction: rtl !important;
             text-align: right !important;
@@ -66,11 +69,11 @@ if st.button("הפעל ניתוח אייגנט"):
 
             pdf_temp_path = None
 
-            # Streamlit streams files into memory; persist locally so main.py can resolve the file path
+            # Streamlit streams files into memory; persist safely via secure OS temporary files
             if uploaded_file is not None:
-                pdf_temp_path = f"temp_{uploaded_file.name}"
-                with open(pdf_temp_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                    temp_file.write(uploaded_file.getbuffer())
+                    pdf_temp_path = temp_file.name
 
             # Fallback default prompt if the user uploads a document without typing instructions
             final_query = (
